@@ -1,7 +1,7 @@
-import * as tf from '@tensorflow/tfjs-core';
-import '@tensorflow/tfjs-backend-webgl';  // Import WebGL backend
-import '@tensorflow/tfjs-backend-cpu';    // Import CPU backend
+// faceDetection.js
+import * as tf from '@tensorflow/tfjs';
 import * as blazeface from '@tensorflow-models/blazeface';
+import '@tensorflow/tfjs-backend-webgl';
 
 export class FaceDetection {
   constructor(videoElement, canvasElement, resizeWidth = 640, resizeHeight = 480, faceHeightThreshold = 50) {
@@ -22,25 +22,15 @@ export class FaceDetection {
       console.log('Using WebGL backend');
     } catch (error) {
       console.warn('WebGL backend not supported. Falling back to CPU.');
-      try {
-        await tf.setBackend('cpu');
-        await tf.ready();
-        console.log('Using CPU backend');
-      } catch (cpuError) {
-        console.error('Failed to set CPU backend:', cpuError);
-      }
+      await tf.setBackend('cpu');
+      await tf.ready();
+      console.log('Using CPU backend');
     }
-    const backends = tf.getBackend();
-    console.log('Current backend:', backends);
   }
 
   async loadModel() {
-    try {
-      this.model = await blazeface.load();
-      console.log('BlazeFace model loaded');
-    } catch (error) {
-      console.error('Error loading BlazeFace model:', error);
-    }
+    this.model = await blazeface.load();
+    console.log('BlazeFace model loaded');
   }
 
   async setupWebcam() {
@@ -74,6 +64,7 @@ export class FaceDetection {
 
     requestAnimationFrame(() => this.detectFaces());
   }
+
   async resizeImage(video) {
     const tempCanvas = document.createElement('canvas');
     const tempCtx = tempCanvas.getContext('2d');
@@ -88,37 +79,46 @@ export class FaceDetection {
       resizedImage.onload = () => resolve(resizedImage);
     });
   }
-  
-  cropFace(prediction) {
+
+  cropFace(prediction, image) {
     const [startX, startY] = prediction.topLeft;
     const [endX, endY] = prediction.bottomRight;
     const size = [endX - startX, endY - startY];
-
-    if (size[1] >= this.faceHeightThreshold) {
+  
+    const scaleX = image.width / this.resizeWidth;
+    const scaleY = image.height / this.resizeHeight;
+  
+    const x = startX * scaleX;
+    const y = startY * scaleY;
+    const width = size[0] * scaleX;
+    const height = size[1] * scaleY;
+  
+    if (height >= this.faceHeightThreshold) {
       this.ctx.beginPath();
-      this.ctx.rect(startX, startY, size[0], size[1]);
+      this.ctx.rect(x, y, width, height);
       this.ctx.lineWidth = 2;
       this.ctx.strokeStyle = 'green';
       this.ctx.stroke();
-
+  
       const faceCanvas = document.createElement('canvas');
       const faceCtx = faceCanvas.getContext('2d');
-      faceCanvas.width = size[0];
-      faceCanvas.height = size[1];
-
+      faceCanvas.width = 112;
+      faceCanvas.height = 112;
+  
       faceCtx.drawImage(
-        this.video,
-        startX,
-        startY,
-        size[0],
-        size[1],
+        image,
+        x,
+        y,
+        width,
+        height,
         0,
         0,
-        size[0],
-        size[1]
+        112,
+        112
       );
-
+  
       this.croppedFaces.push(faceCanvas.toDataURL());
     }
   }
+  
 }
