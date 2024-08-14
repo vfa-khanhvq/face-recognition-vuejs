@@ -1,15 +1,14 @@
 <template>
-  <img alt="Vue logo" src="./assets/logo.png">
-  <HelloWorld msg="Welcome to Your Vue.js App"/>
+  <FaceRecognition />
 </template>
 
 <script>
-import HelloWorld from './components/HelloWorld.vue'
+import FaceRecognition from './components/FaceRecognition.vue'
 
 export default {
   name: 'App',
   components: {
-    HelloWorld
+    FaceRecognition
   }
 }
 </script>
