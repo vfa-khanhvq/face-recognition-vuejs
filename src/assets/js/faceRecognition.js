@@ -1,30 +1,61 @@
 import * as faceapi from 'face-api.js';
 
 const emotionData = {};
+
 // Load models
 export async function loadModels(modelUrl) {
-  await Promise.all([
-    faceapi.nets.ssdMobilenetv1.loadFromUri(modelUrl), // More robust face detector
-    faceapi.nets.faceLandmark68Net.loadFromUri(modelUrl),
-    faceapi.nets.faceRecognitionNet.loadFromUri(modelUrl),
-    faceapi.nets.faceExpressionNet.loadFromUri(modelUrl), 
-  ]);
-  console.log('Models loaded');
+  try {
+    await faceapi.nets.tinyFaceDetector.loadFromUri(modelUrl);
+    console.log('ssdMobilenetv1 loaded');
+
+    await faceapi.nets.faceLandmark68Net.loadFromUri(modelUrl);
+    console.log('faceLandmark68Net loaded');
+
+    await faceapi.nets.faceRecognitionNet.loadFromUri(modelUrl);
+    console.log('faceRecognitionNet loaded');
+
+    await faceapi.nets.faceExpressionNet.loadFromUri(modelUrl);
+    console.log('faceExpressionNet loaded');
+  } catch (error) {
+    console.error('Error loading models:', error);
+  }
+}
+
+function detectMask(detection) {
+  const landmarks = detection.landmarks;
+  const nose = landmarks.getNose();
+  const mouth = landmarks.getMouth();
+
+  // Calculate the distance between the nose tip and the center of the mouth
+  const noseTip = nose[3];
+  const mouthCenter = mouth[14];
+  const distance = Math.sqrt(
+    Math.pow(noseTip.x - mouthCenter.x, 2) + Math.pow(noseTip.y - mouthCenter.y, 2)
+  );
+
+  // Calculate the face height
+  const faceHeight = detection.detection.box.height;
+
+  // If the nose-mouth distance is less than 15% of the face height, assume a mask is present
+  console.log(distance / faceHeight);
+  return distance / faceHeight < 0.15;
 }
 
 // Start video stream
-export function startVideo(videoElement, onSuccess, onError) {
-  navigator.mediaDevices.getUserMedia({ video: {} })
-    .then(stream => {
-      videoElement.srcObject = stream;
+export async function startVideo(videoElement, onSuccess, onError) {
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({ video: true });
+    videoElement.srcObject = stream;
+    videoElement.onloadedmetadata = () => {
       videoElement.play();
-      if (onSuccess) onSuccess();
-    })
-    .catch(error => {
-      console.error('Error accessing webcam:', error);
-      if (onError) onError(error);
-    });
+      onSuccess();
+    };
+  } catch (error) {
+    console.error('Error accessing video stream:', error);
+    onError(error);
+  }
 }
+
 
 // Detect face from video and manually draw bounding boxes
 export async function detectFaceFromVideo(videoElement, canvasElement, faceDescriptors, displayNames, updateNamesList) {
@@ -41,27 +72,26 @@ export async function detectFaceFromVideo(videoElement, canvasElement, faceDescr
     const frame = await preprocessFrame(videoElement);
     ctx.drawImage(frame, 0, 0, canvas.width, canvas.height);
 
-    const detections = await faceapi.detectAllFaces(frame, new faceapi.SsdMobilenetv1Options({ minConfidence: 0.5 }))
+    const detections = await faceapi.detectAllFaces(frame, new faceapi.TinyFaceDetectorOptions({ inputSize: 224, scoreThreshold: 0.5 }))
       .withFaceLandmarks()
       .withFaceDescriptors()
       .withFaceExpressions();
 
     if (detections.length > 0) {
-      console.log(`Detected ${detections.length} face(s)`);
-
       // Iterate through all detected faces
       for (const detection of detections) {
         // Get the dominant emotion
         // const emotion = getTopEmotion(detection.expressions);
-        console.log(detection);
         // Draw bounding box
         const { detection: { box } } = detection;
 
         // Extract and display cropped face
         const croppedFace = cropFace(videoElement, box);
-        const bestMatch = findBestMatch(detection.descriptor, faceDescriptors);
-        // console.log(bestMatch)
-        const threshold = 0.4;
+        const hasMask = await detectMask(detection);
+        console.log(hasMask);
+        const threshold = hasMask ? 0.4 : 0.3; // Increase threshold when mask is present
+        const bestMatch = findBestMatch(detection.descriptor, faceDescriptors, hasMask, threshold);
+        //const threshold = 0.5;
         ctx.strokeStyle = bestMatch.distance < threshold ? 'green' : 'red';
         ctx.lineWidth = 2;
         ctx.strokeRect(box.x, box.y, box.width, box.height);
@@ -71,11 +101,11 @@ export async function detectFaceFromVideo(videoElement, canvasElement, faceDescr
         // landmarks.positions.forEach(position => {
         //   ctx.beginPath();
         //   ctx.arc(position.x, position.y, 2, 0, 2 * Math.PI);
-        //   ctx.fillStyle = bestMatch.distance < 0.5 ? 'green' : 'blue';
+        //   ctx.fillStyle = bestMatch.distance < threshold ? 'green' : 'red';
         //   ctx.fill();
         // });
 
-         // Display emotion above the bounding box
+        // Display emotion above the bounding box
         //  ctx.fillStyle = 'white';
         //  ctx.font = '16px Arial';
         //  ctx.fillText(emotion, box.x, box.y - 5);
@@ -84,36 +114,20 @@ export async function detectFaceFromVideo(videoElement, canvasElement, faceDescr
           if (!emotionData[bestMatch.name]) {
             emotionData[bestMatch.name] = {};
           }
-          
+
           // Update emotion data
+          // console.log(detection);
           Object.entries(detection.expressions).forEach(([emotion, value]) => {
             emotionData[bestMatch.name][emotion] = Math.round(value * 100);
           });
-  
+
           updateNamesList(bestMatch, croppedFace, emotionData[bestMatch.name]);
         }
       }
     }
-  }, 33); // Check every 33ms (~30 frames per second)
+  }, 100); // Check every 33ms (~30 frames per second)
 }
-// function getTopEmotion(expressions) {
-//   if (!expressions || typeof expressions !== 'object') {
-//     console.warn('Invalid expressions object:', expressions);
-//     return null;
-//   }
 
-//   let topEmotion = null;
-//   let maxScore = -1;
-
-//   for (const [emotion, score] of Object.entries(expressions)) {
-//     if (score > maxScore) {
-//       maxScore = score;
-//       topEmotion = emotion;
-//     }
-//   }
-
-//   return topEmotion;
-// }
 // Preprocess frame to improve detection quality
 async function preprocessFrame(videoElement) {
   const tempCanvas = document.createElement('canvas');
@@ -149,49 +163,83 @@ function cropFace(videoElement, box) {
   return tempCanvas.toDataURL('image/png'); // Return the cropped face as a data URL
 }
 
-// Find the best match for a given face descriptor
-function findBestMatch(descriptor, faceDescriptors) {
+function findBestMatch(descriptor, faceDescriptors, hasMask, threshold) {
   let bestMatch = { name: 'Unknown', distance: Infinity };
 
-  for (const [name, descriptors] of Object.entries(faceDescriptors)) {
-    for (const knownDescriptor of descriptors) {
-      const distance = faceapi.euclideanDistance(descriptor, knownDescriptor);
+  // Define the range of the descriptor that corresponds to the upper face
+  // These indices are approximate and may need adjustment
+  const upperFaceStart = 0;
+  const upperFaceEnd = hasMask ? 68 : descriptor.length; // Use only upper face if mask is detected
+
+  // Function to calculate Euclidean distance
+  const euclideanDistance = (a, b) => {
+    return Math.sqrt(a.slice(upperFaceStart, upperFaceEnd).map((x, i) => {
+      return Math.pow(x - b[i], 2);
+    }).reduce((sum, now) => sum + now));
+  };
+
+  for (const [name, knownDescriptors] of Object.entries(faceDescriptors)) {
+    for (const knownDescriptor of knownDescriptors) {
+      const distance = euclideanDistance(descriptor, knownDescriptor);
       if (distance < bestMatch.distance) {
-        // console.log(bestMatch)
         bestMatch = { name, distance };
       }
     }
   }
+
+  // Adjust threshold based on whether a mask is detected
+  //const threshold = hasMask ? 0.6 : 0.5; // Increase threshold when mask is present
+  if (bestMatch.distance > threshold) {
+    bestMatch.name = 'Unknown';
+  }
+
   return bestMatch;
 }
 
 // Load face descriptors from a dataset
+// Load face descriptors from a dataset
 export async function loadDataset(faceDescriptors) {
-  const names = ['khanhvq', 'tuyenbq']; // List of known names
   const baseUrl = '/dataset'; // Adjust this path if needed
-  for (const name of names) {
-    faceDescriptors[name] = [];
-    const folderUrl = `${baseUrl}/${name}`;
 
-    // Assuming fixed filenames for simplicity
-    const filenames = [
-      'face1.jpg', 'face2.jpg', 'face3.jpg','face4.jpg','face5.jpg','face6.jpg','face7.jpg','face8.jpg','face9.jpg','face10.jpg','face11.jpg','face12.jpg','face13.jpg','face14.jpg','face15.jpg','face16.jpg','face17.jpg','face18.jpg'
-    ];
+  try {
+    // Fetch the JSON file containing names and filenames
+    const response = await fetch('dataset/images.json'); // Update the path to your JSON file
+    const data = await response.json();
 
-    for (const filename of filenames) {
-      const img = new Image();
-      img.src = `${folderUrl}/${filename}`;
-      img.onload = async () => {
-        const detections = await faceapi.detectSingleFace(img, new faceapi.SsdMobilenetv1Options({ minConfidence: 0.5 }))
-          .withFaceLandmarks()
-          .withFaceDescriptor();
+    for (const [name, filenames] of Object.entries(data)) {
+      faceDescriptors[name] = [];
+      const folderUrl = `${baseUrl}/${name}`;
 
-        if (detections) {
-          faceDescriptors[name].push(detections.descriptor);
-          console.log(`Loaded descriptor for ${name}`);
+      for (const filename of filenames) {
+        try {
+          const img = await loadImage(`${folderUrl}/${filename}`);
+          const detections = await faceapi.detectSingleFace(img, new faceapi.TinyFaceDetectorOptions({ inputSize: 224, scoreThreshold: 0.5 }))
+            .withFaceLandmarks()
+            .withFaceDescriptor();
+
+          if (detections) {
+            faceDescriptors[name].push(detections.descriptor);
+          }
+        } catch (error) {
+          console.error(`Error loading or processing image: ${filename} for ${name}`, error);
+          // Skip this image and continue with the next one
+          continue;
         }
-      };
+      }
     }
+  } catch (error) {
+    console.error('Error fetching or parsing JSON file', error);
   }
 }
+
+// Utility function to load an image
+function loadImage(src) {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.src = src;
+    img.onload = () => resolve(img);
+    img.onerror = reject;
+  });
+}
+
 

@@ -1,14 +1,18 @@
 <template>
   <div>
     <h1>Face Recognition</h1>
-    <div class="container">
+    <div v-if="loading" class="loading-screen">
+      <div class="loading-spinner"></div>
+      <p>Loading models and setting up face data...</p>
+    </div>
+    <div v-else class="container">
       <div class="video-container">
         <video ref="video" autoplay playsinline style="display: none;"></video>
         <canvas ref="videoCanvas"></canvas>
       </div>
       <div class="names-list" ref="namesList">
-        <div v-for="(data, name) in emotionData" :key="name" class="name-emotion-chart">
-          <div class="name-container" :style="{ color: data.color }">
+        <div class="name-emotion-chart">
+          <div v-for="(data, name) in emotionData" :key="name" class="name-container" :style="{ color: data.color }">
             <img :src="data.croppedFace" alt="name" :style="{ borderColor: data.color }">
             <span>{{ name }}</span>
           </div>
@@ -32,6 +36,7 @@ export default {
   },
   data() {
     return {
+      loading: true, // Add a loading state
       faceDescriptors: {},
       displayNames: new Set(),
       emotionData: {},
@@ -39,6 +44,12 @@ export default {
       colors: ['rgba(75, 192, 192, 1)', 'rgba(255, 99, 132, 1)', 'rgba(153, 102, 255, 1)', 'rgba(255, 159, 64, 1)'], // Add more colors as needed
       chartOptions: {
         responsive: true,
+        scales: {
+          y: {
+            min: 0,
+            max: 100,
+          },
+        },
         plugins: {
           legend: {
             display: true,
@@ -54,6 +65,7 @@ export default {
         }
       },
       chartData: {},
+      displayChart: false,
     };
   },
   async mounted() {
@@ -62,35 +74,47 @@ export default {
       const modelUrl = '/models'; // Adjust this path if needed
       await loadModels(modelUrl);
       console.log('Models loaded');
-      this.namesListReady = true; // Set this flag when the component is mounted
-      this.initializeFaceRecognition();
       await this.loadDataset();
+      this.namesListReady = true; // Set this flag when the component is mounted
+      this.loading = false; // Set loading to false when everything is ready
+      this.initializeFaceRecognition();
+      this.displayChart = true;
     } catch (error) {
       console.error('Error initializing:', error);
+      this.loading = false; // Hide loading screen even if there is an error
     }
   },
   methods: {
     initializeFaceRecognition() {
-      const videoElement = this.$refs.video;
+      this.$nextTick(() => {
+        const videoElement = this.$refs.video;
 
-      videoElement.addEventListener('loadedmetadata', () => {
-        const canvas = this.$refs.videoCanvas;
-        canvas.width = videoElement.videoWidth;
-        canvas.height = videoElement.videoHeight;
+        if (!videoElement) {
+          console.log('Video element not found');
+          return;
+        }
 
-        detectFaceFromVideo(
-          videoElement,
-          canvas,
-          this.faceDescriptors,
-          this.displayNames,
-          this.updateNamesList.bind(this)
-        );
-      });
+        startVideo(videoElement, () => {
+          console.log('Video started');
+        }, (error) => {
+          alert('Error initializing video:', error);
+        });
 
-      startVideo(videoElement, () => {
-        console.log('Video started');
-      }, (error) => {
-        console.error('Error initializing video:', error);
+        // setTimeout(() => {
+        videoElement.addEventListener('loadedmetadata', () => {
+          const canvas = this.$refs.videoCanvas;
+          canvas.width = videoElement.videoWidth;
+          canvas.height = videoElement.videoHeight;
+
+          detectFaceFromVideo(
+            videoElement,
+            canvas,
+            this.faceDescriptors,
+            this.displayNames,
+            this.updateNamesList.bind(this)
+          );
+        });
+        // }, 0);
       });
     },
     async loadDataset() {
@@ -104,15 +128,16 @@ export default {
       // let face = croppedFace;
       let distance = bestMatch.distance;
       const color = this.emotionData[bestMatch.name] ? this.emotionData[bestMatch.name].color : this.getRandomColor();
-      if(this.emotionData[bestMatch.name]){
-        if(distance < this.emotionData[bestMatch.name].distance){
+      if (this.emotionData[bestMatch.name]) {
+        if (distance < this.emotionData[bestMatch.name].distance) {
           croppedFace = this.emotionData[bestMatch.name].croppedFace;
           distance = this.emotionData[bestMatch.name].distance;
         }
       }
       // Use direct assignment for Vue 3 reactivity
       this.emotionData[bestMatch.name] = { croppedFace, emotions, color, distance };
-      this.updateChart();
+      if (this.displayChart)
+        this.updateChart();
     },
     updateChart() {
       if (Object.keys(this.emotionData).length < 1) {
@@ -135,16 +160,15 @@ export default {
         labels,
         datasets
       }
-      console.log(this.chartData)
     },
     getRandomColor() {
-    const letters = '0123456789ABCDEF';
-    let color = '#';
-    for (let i = 0; i < 6; i++) {
+      const letters = '0123456789ABCDEF';
+      let color = '#';
+      for (let i = 0; i < 6; i++) {
         color += letters[Math.floor(Math.random() * 16)];
+      }
+      return color;
     }
-    return color;
-}
   },
 };
 </script>
@@ -164,6 +188,35 @@ h1 {
   background-color: #333;
   color: white;
   margin: 0;
+}
+
+.loading-screen {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  height: calc(100vh - 70px);
+}
+
+.loading-spinner {
+  border: 16px solid #f3f3f3;
+  /* Light grey */
+  border-top: 16px solid #3498db;
+  /* Blue */
+  border-radius: 50%;
+  width: 120px;
+  height: 120px;
+  animation: spin 2s linear infinite;
+}
+
+@keyframes spin {
+  0% {
+    transform: rotate(0deg);
+  }
+
+  100% {
+    transform: rotate(360deg);
+  }
 }
 
 .container {
@@ -210,6 +263,7 @@ canvas {
   .video-container {
     width: 100%;
     height: 50vh;
+    margin-bottom: 10px;
   }
 
   .names-list {
